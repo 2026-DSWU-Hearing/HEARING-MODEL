@@ -2,4 +2,3 @@ websockets
 numpy
 tensorflow-hub
 scipy
-df
