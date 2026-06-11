@@ -4,5 +4,5 @@ httpx
 PyJWT
 python-dotenv
 numpy
-tensorflow-hub
+tensorflow-hub==0.16.1
 scipy
