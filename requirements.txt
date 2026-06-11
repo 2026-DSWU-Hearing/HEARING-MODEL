@@ -1,4 +1,8 @@
-websockets
+fastapi
+uvicorn[standard]
+httpx
+PyJWT
+python-dotenv
 numpy
 tensorflow-hub
 scipy
