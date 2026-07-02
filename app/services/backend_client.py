@@ -21,22 +21,33 @@ def _make_token() -> str:
 
 async def send_detection(client: httpx.AsyncClient, result: dict) -> None:
     if not all([settings.BACKEND_URL, settings.JWT_SECRET, settings.DEVICE_ID]):
-        logger.warning("백엔드 환경변수 미설정 — 전송 건너뜀 (BACKEND_URL/JWT_SECRET/DEVICE_ID 확인)")
+        logger.warning("백엔드 환경변수 미설정 — 전송 건너뜀")
         return
+
+    if not result or not result.get("top_sounds"):
+        logger.warning("전송할 감지 결과 없음")
+        return
+
+    top = result["top_sounds"][0]
+
     try:
         body = {
-            "sound_category": result["category"],
-            "sound_name": result["block"],
-            "confidence": result["score"],
+            "sound_category": top["category"],
+            "sound_name": top["block"],
+            "confidence": top["score"],
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
+
         logger.info("백엔드 전송 데이터: %s", body)
+
         resp = await client.post(
             f"{settings.BACKEND_URL}/devices/{settings.DEVICE_ID}/detections",
             json=body,
             headers={"Authorization": f"Bearer {_make_token()}"},
         )
+
         resp.raise_for_status()
         logger.info("백엔드 전송 완료: %s (%d)", body["sound_name"], resp.status_code)
+
     except Exception as e:
         logger.error("백엔드 전송 실패: %s", e)
