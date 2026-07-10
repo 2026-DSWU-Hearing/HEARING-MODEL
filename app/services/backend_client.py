@@ -19,22 +19,20 @@ def _make_token() -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
 
 
-async def send_detection(client: httpx.AsyncClient, result: dict) -> None:
+async def send_detection(client: httpx.AsyncClient, result: dict | None) -> None:
     if not all([settings.BACKEND_URL, settings.JWT_SECRET, settings.DEVICE_ID]):
         logger.warning("백엔드 환경변수 미설정 — 전송 건너뜀")
         return
 
-    if not result or not result.get("top_sounds"):
+    if not result:
         logger.warning("전송할 감지 결과 없음")
         return
 
-    top = result["top_sounds"][0]
-
     try:
         body = {
-            "sound_category": top["category"],
-            "sound_name": top["block"],
-            "confidence": top["score"],
+            "sound_category": result["category"],
+            "sound_name": result["block"],
+            "confidence": result["score"],
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
 
