@@ -181,6 +181,16 @@ CATEGORY_MAP = {
 
     "Steam": ("생활음", "증기"),
 
+    "Music": ("생활음", "음악"),
+    "Electronic music": ("생활음", "음악"),
+    "Piano": ("생활음", "음악"),
+    "Guitar": ("생활음", "음악"),
+    "Violin, fiddle": ("생활음", "음악"),
+    "Drum": ("생활음", "음악"),
+    "Jazz": ("생활음", "음악"),
+    "Classical music": ("생활음", "음악"),
+    "Orchestra": ("생활음", "음악"),
+
     # 자연
     "Wind": ("자연", "바람·비"),
     "Rain": ("자연", "바람·비"),
@@ -227,16 +237,7 @@ CATEGORY_MAP = {
     "Microwave oven": ("주방", "조리"),
     "Blender": ("주방", "조리"),
 
-    # 음악
-    "Music": ("음악", "대중 음악"),
-    "Electronic music": ("음악", "대중 음악"),
-    "Piano": ("음악", "피아노"),
-    "Guitar": ("음악", "현악기"),
-    "Violin, fiddle": ("음악", "현악기"),
-    "Drum": ("음악", "드럼"),
-    "Jazz": ("음악", "재즈"),
-    "Classical music": ("음악", "클래식"),
-    "Orchestra": ("음악", "클래식"),
+    
 }
 
 
