@@ -3,143 +3,150 @@ import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.core.config import settings
-from app.core.direction import parse_audio_packet
-from app.services.backend_client import send_detection
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 같은 소리의 반복 알림을 막기 위한 마지막 알림 시간
-_last_alert_time: dict[str, float] = {}
+# 16 kHz × 1초 × int16(2 bytes)
+EXPECTED_AUDIO_BYTES = 32_000
 
 
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+@router.websocket("/ws/analyze")
+async def analyze_websocket(websocket: WebSocket):
+    """
+    하드웨어 AI 오디오 분석용 WebSocket.
+
+    ESP32 -> AI 서버
+    - binary frame 1개
+    - PCM signed int16 little-endian
+    - 16 kHz
+    - mono
+    - 1초
+    - 정확히 32,000 bytes
+    - 방향 헤더 없음
+
+    처리 방식
+    - frame 1개 수신 = YAMNet 추론 1회
+    - 별도 링버퍼 사용하지 않음
+
+    AI 서버 -> ESP32
+    {
+        "status": "ok",
+        "top_sounds": [...]
+    }
+    """
+
     await websocket.accept()
-    logger.info("ESP32 연결됨")
+
+    logger.info(
+        "ESP32 /ws/analyze 연결됨: %s",
+        websocket.client,
+    )
 
     try:
         while True:
-            # ESP32 바이너리 패킷 수신
-            packet = await websocket.receive_bytes()
+            # -------------------------------------------------
+            # 1. ESP32로부터 1초 PCM 프레임 1개 수신
+            # -------------------------------------------------
+            audio_bytes = await websocket.receive_bytes()
 
-            try:
-                # 앞 4바이트에서 방향을 추출하고,
-                # 나머지 순수 PCM만 분리
-                (
-                    direction_value,
-                    direction_name,
-                    pcm_audio,
-                ) = parse_audio_packet(packet)
+            received_size = len(audio_bytes)
 
-            except ValueError as error:
-                logger.warning("잘못된 오디오 패킷: %s", error)
+            logger.info(
+                "오디오 프레임 수신: %d bytes",
+                received_size,
+            )
 
+            # -------------------------------------------------
+            # 2. 프레임 크기 확인
+            #
+            # 16,000 samples
+            # × int16 2 bytes
+            # = 32,000 bytes
+            # -------------------------------------------------
+            if received_size != EXPECTED_AUDIO_BYTES:
+                logger.warning(
+                    "잘못된 오디오 프레임 크기: "
+                    "expected=%d, received=%d",
+                    EXPECTED_AUDIO_BYTES,
+                    received_size,
+                )
+
+                # 응답이 없으면 하드웨어가 timeout으로
+                # 재연결할 수 있으므로 오류도 즉시 반환
                 await websocket.send_json({
                     "status": "error",
-                    "message": str(error),
+                    "message": (
+                        f"invalid audio frame size: "
+                        f"expected {EXPECTED_AUDIO_BYTES}, "
+                        f"received {received_size}"
+                    ),
+                    "top_sounds": [],
                 })
+
                 continue
 
-            logger.info(
-                "오디오 패킷 수신: direction=%s(%d), "
-                "packet=%d bytes, pcm=%d bytes",
-                direction_name,
-                direction_value,
-                len(packet),
-                len(pcm_audio),
-            )
+            # -------------------------------------------------
+            # 3. YAMNet 추론
+            #
+            # 별도 링버퍼 없음.
+            # 받은 1 frame = 추론 1회.
+            # -------------------------------------------------
+            started_at = time.perf_counter()
 
-            # YAMNet에는 방향 헤더를 제외한 PCM만 전달
             result = websocket.app.state.classifier.classify(
-                pcm_audio
+                audio_bytes
             )
 
+            inference_time = time.perf_counter() - started_at
+
+            logger.info(
+                "YAMNet 추론 완료: %.3f초",
+                inference_time,
+            )
+
+            # -------------------------------------------------
+            # 4. 결과가 없는 경우에도 반드시 응답
+            # -------------------------------------------------
             if result is None:
                 await websocket.send_json({
-                    "status": "not_detected",
-                    "direction": direction_name,
-                    "direction_value": direction_value,
+                    "status": "ok",
+                    "top_sounds": [],
                 })
+
                 continue
 
-            top_sounds = result.get("top_sounds", [])
-
-            if not top_sounds:
-                await websocket.send_json({
-                    "status": "not_detected",
-                    "direction": direction_name,
-                    "direction_value": direction_value,
-                })
-                continue
-
-            # 분석 결과에 ESP32 방향 정보 추가
-            result["direction"] = direction_name
-            result["direction_value"] = direction_value
-
-            # 가장 신뢰도가 높은 소리
-            top = top_sounds[0]
-
-            block = top["block"]
-            category = top["category"]
-            score = top["score"]
-            now = time.time()
-
-            logger.info(
-                "소리 분석: %s - %s, direction=%s (%.1f%%)",
-                category,
-                block,
-                direction_name,
-                score * 100,
+            # classifier.py의 기존 반환값
+            #
+            # {
+            #     "top_sounds": [...]
+            # }
+            #
+            # 을 그대로 사용
+            # -------------------------------------------------
+            top_sounds = result.get(
+                "top_sounds",
+                [],
             )
 
-            # ESP32에 전체 분석 결과 반환
             await websocket.send_json({
-                "status": "success",
-                "direction": direction_name,
-                "direction_value": direction_value,
+                "status": "ok",
                 "top_sounds": top_sounds,
             })
 
-            # 설정한 신뢰도 이상일 때만 알림 처리
-            if score < settings.ALERT_THRESHOLD:
-                continue
-
-            # 같은 소리에 대한 쿨다운 확인
-            alert_key = f"{block}:{direction_name}"
-            last_alert = _last_alert_time.get(alert_key, 0)
-
-            if now - last_alert <= settings.COOLDOWN_SECONDS:
-                continue
-
-            # 하드웨어 알림
-            await websocket.send_text(
-                f"ALERT:{block}:{direction_name}"
-            )
-
-            logger.warning(
-                "알림 전송: %s, direction=%s (%.1f%%)",
-                block,
-                direction_name,
-                score * 100,
-            )
-
-            _last_alert_time[alert_key] = now
-
-            # 백엔드로 방향 포함 분석 결과 전송
-            await send_detection(
-                websocket.app.state.http_client,
-                result,
+            logger.info(
+                "분석 결과 전송 완료: %d개",
+                len(top_sounds),
             )
 
     except WebSocketDisconnect:
-        logger.info("ESP32 연결 해제")
+        logger.info(
+            "ESP32 /ws/analyze 연결 해제"
+        )
 
     except Exception as error:
         logger.exception(
-            "WebSocket 처리 중 에러: %s",
+            "/ws/analyze 처리 중 오류: %s",
             error,
         )
 
