@@ -1,0 +1,27 @@
+{
+  "keras_model": "C:\\Users\\dtanf\\OneDrive\\Desktop\\hearing-hardware-ai\\models\\emergency_classifier_v8_best.keras",
+  "saved_model": "C:\\Users\\dtanf\\OneDrive\\Desktop\\hearing-hardware-ai\\models\\emergency_classifier_v8_savedmodel",
+  "int8_model": "C:\\Users\\dtanf\\OneDrive\\Desktop\\hearing-hardware-ai\\models\\emergency_classifier_v8_int8.tflite",
+  "threshold": 0.17500000000000002,
+  "evaluation_dataset": "validation",
+  "float_metrics": {
+    "accuracy": 0.955244122965642,
+    "precision": 0.8355754857997011,
+    "recall": 0.8639876352395672,
+    "f1": 0.8495440729483282
+  },
+  "int8_metrics": {
+    "accuracy": 0.9534358047016275,
+    "precision": 0.8295964125560538,
+    "recall": 0.8578052550231839,
+    "f1": 0.8434650455927052
+  },
+  "difference": {
+    "accuracy": -0.001808318264014508,
+    "precision": -0.005979073243647326,
+    "recall": -0.0061823802163832875,
+    "f1": -0.006079027355623046
+  },
+  "keras_size_bytes": 142802,
+  "int8_size_bytes": 13072
+}

@@ -1,0 +1,50 @@
+{
+  "model": "C:\\Users\\dtanf\\OneDrive\\Desktop\\hearing-hardware-ai\\models\\emergency_classifier_v8_best.keras",
+  "dataset": "final_test",
+  "threshold_source": "validation",
+  "threshold": 0.17500000000000002,
+  "samples": {
+    "total": 4079,
+    "normal": 3549,
+    "emergency": 530
+  },
+  "metrics": {
+    "accuracy": 0.9222848737435646,
+    "precision": 0.7151515151515152,
+    "recall": 0.6679245283018868,
+    "f1": 0.6907317073170731,
+    "roc_auc": 0.8663817073105897,
+    "pr_auc": 0.7520418399401154
+  },
+  "confusion_matrix": [
+    [
+      3408,
+      141
+    ],
+    [
+      176,
+      354
+    ]
+  ],
+  "counts": {
+    "true_negative": 3408,
+    "false_positive": 141,
+    "false_negative": 176,
+    "true_positive": 354
+  },
+  "rates": {
+    "false_alarm_rate": 0.039729501267962805,
+    "emergency_miss_rate": 0.3320754716981132
+  },
+  "targets": {
+    "precision": 0.75,
+    "recall": 0.75,
+    "f1": 0.75
+  },
+  "target_pass": {
+    "precision": false,
+    "recall": false,
+    "f1": false,
+    "overall": false
+  }
+}
