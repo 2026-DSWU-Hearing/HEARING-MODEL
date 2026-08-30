@@ -211,9 +211,7 @@ async def neckband_websocket(websocket: WebSocket):
             # -------------------------------------------------
             # 8. 같은 소리 + 같은 방향 쿨다운 확인
             # -------------------------------------------------
-            alert_key = (
-                f"{block}:{direction_name}"
-            )
+            alert_key = f"{block}"
 
             last_alert = (
                 _last_alert_time.get(
