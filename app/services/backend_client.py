@@ -27,6 +27,7 @@ def _make_token() -> str:
 async def send_detection(
     client: httpx.AsyncClient,
     result: dict | None,
+    ondevice_vibrated: bool = False,
 ) -> None:
     if not all([
         settings.BACKEND_URL,

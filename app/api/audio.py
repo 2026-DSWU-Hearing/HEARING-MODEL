@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.direction import parse_audio_packet
 from app.services.backend_client import send_detection
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -27,7 +28,7 @@ _last_alert_time: dict[str, float] = {}
 # ============================================================
 # /ws/neckband
 #
-# 기존 /ws의 넥밴드 로직을 그대로 복구
+# ESP32 넥밴드 메인 WebSocket
 # ============================================================
 
 @router.websocket("/ws/neckband")
@@ -38,25 +39,40 @@ async def neckband_websocket(websocket: WebSocket):
     ESP32 -> AI 서버
 
     packet 구조:
-        [4-byte direction header]
-        [PCM audio]
+        [0]   direction         1 byte
+        [1]   ondevice_vibrated 1 byte
+        [2:4] padding           2 bytes
+        [4:]  PCM audio
 
-    방향 헤더:
+    direction:
         0 = FRONT
         1 = BACK
         2 = LEFT
         3 = RIGHT
         4 = UNKNOWN
 
+    ondevice_vibrated:
+        0 = 온디바이스 AI에 의한 로컬 진동 없음
+        1 = 온디바이스 AI가 긴급으로 판단하여 이미 로컬 진동 수행
+
     처리:
         packet 수신
-        -> 방향 헤더 파싱
+        -> 방향 / 온디바이스 진동 여부 파싱
         -> PCM 분리
         -> YAMNet 분석
         -> ESP32에 분석 결과 반환
-        -> threshold 이상이면 ALERT 반환
-        -> cooldown 확인
-        -> 백엔드에 detection 전송
+
+        ondevice_vibrated == False:
+            -> ALERT_THRESHOLD 확인
+            -> COOLDOWN_SECONDS 확인
+            -> 하드웨어 ALERT
+            -> 백엔드 detection 전송
+
+        ondevice_vibrated == True:
+            -> ALERT_THRESHOLD 무시
+            -> COOLDOWN_SECONDS 무시
+            -> 하드웨어는 이미 진동했으므로 ALERT 재전송하지 않음
+            -> 백엔드 detection 강제 전송
     """
 
     await websocket.accept()
@@ -71,15 +87,18 @@ async def neckband_websocket(websocket: WebSocket):
             # -------------------------------------------------
             # 1. ESP32 바이너리 패킷 수신
             # -------------------------------------------------
+
             packet = await websocket.receive_bytes()
 
             # -------------------------------------------------
-            # 2. 방향 헤더 + PCM 분리
+            # 2. 방향 + 온디바이스 진동 여부 + PCM 분리
             # -------------------------------------------------
+
             try:
                 (
                     direction_value,
                     direction_name,
+                    ondevice_vibrated,
                     pcm_audio,
                 ) = parse_audio_packet(packet)
 
@@ -99,10 +118,12 @@ async def neckband_websocket(websocket: WebSocket):
             logger.info(
                 "오디오 패킷 수신: "
                 "direction=%s(%d), "
+                "ondevice_vibrated=%s, "
                 "packet=%d bytes, "
                 "pcm=%d bytes",
                 direction_name,
                 direction_value,
+                ondevice_vibrated,
                 len(packet),
                 len(pcm_audio),
             )
@@ -110,8 +131,9 @@ async def neckband_websocket(websocket: WebSocket):
             # -------------------------------------------------
             # 3. YAMNet 분석
             #
-            # 방향 헤더를 제거한 PCM만 classifier에 전달
+            # 4-byte 헤더를 제거한 PCM만 classifier에 전달
             # -------------------------------------------------
+
             started_at = time.perf_counter()
 
             result = (
@@ -137,11 +159,13 @@ async def neckband_websocket(websocket: WebSocket):
             # -------------------------------------------------
             # 4. 감지 결과 없음
             # -------------------------------------------------
+
             if result is None:
                 await websocket.send_json({
                     "status": "not_detected",
                     "direction": direction_name,
                     "direction_value": direction_value,
+                    "ondevice_vibrated": ondevice_vibrated,
                 })
 
                 continue
@@ -156,19 +180,25 @@ async def neckband_websocket(websocket: WebSocket):
                     "status": "not_detected",
                     "direction": direction_name,
                     "direction_value": direction_value,
+                    "ondevice_vibrated": ondevice_vibrated,
                 })
 
                 continue
 
             # -------------------------------------------------
-            # 5. 분석 결과에 방향 추가
+            # 5. 분석 결과에 방향 / 온디바이스 진동 여부 추가
             # -------------------------------------------------
+
             result["direction"] = (
                 direction_name
             )
 
             result["direction_value"] = (
                 direction_value
+            )
+
+            result["ondevice_vibrated"] = (
+                ondevice_vibrated
             )
 
             # 가장 높은 신뢰도의 소리
@@ -182,66 +212,126 @@ async def neckband_websocket(websocket: WebSocket):
 
             logger.info(
                 "소리 분석: %s - %s, "
-                "direction=%s (%.1f%%)",
+                "direction=%s, "
+                "ondevice_vibrated=%s "
+                "(%.1f%%)",
                 category,
                 block,
                 direction_name,
+                ondevice_vibrated,
                 score * 100,
             )
 
             # -------------------------------------------------
             # 6. ESP32에 전체 분석 결과 반환
             # -------------------------------------------------
+
             await websocket.send_json({
                 "status": "success",
                 "direction": direction_name,
                 "direction_value": direction_value,
+                "ondevice_vibrated": ondevice_vibrated,
                 "top_sounds": top_sounds,
             })
 
             # -------------------------------------------------
-            # 7. Alert threshold 확인
+            # 7. 백엔드 보고 여부 판단
+            #
+            # ondevice_vibrated == True:
+            #   온디바이스 AI가 이미 긴급으로 판단하여
+            #   사용자에게 진동을 발생시킨 상태.
+            #
+            #   따라서 서버 YAMNet score와 관계없이
+            #   사후 웹앱 알림을 남기기 위해 백엔드에 보고한다.
+            #
+            # ondevice_vibrated == False:
+            #   기존 ALERT_THRESHOLD / COOLDOWN 로직 유지.
             # -------------------------------------------------
-            if (
-                score
-                < settings.ALERT_THRESHOLD
-            ):
-                continue
 
-            # -------------------------------------------------
-            # 8. 같은 소리 + 같은 방향 쿨다운 확인
-            # -------------------------------------------------
             alert_key = f"{block}"
 
-            last_alert = (
-                _last_alert_time.get(
-                    alert_key,
-                    0,
+            if not ondevice_vibrated:
+
+                # ---------------------------------------------
+                # 7-1. 기존 Alert threshold 확인
+                # ---------------------------------------------
+
+                if (
+                    score
+                    < settings.ALERT_THRESHOLD
+                ):
+                    continue
+
+                # ---------------------------------------------
+                # 7-2. 기존 cooldown 확인
+                # ---------------------------------------------
+
+                last_alert = (
+                    _last_alert_time.get(
+                        alert_key,
+                        0,
+                    )
                 )
-            )
 
-            if (
-                now - last_alert
-                <= settings.COOLDOWN_SECONDS
-            ):
-                continue
+                if (
+                    now - last_alert
+                    <= settings.COOLDOWN_SECONDS
+                ):
+                    continue
+
+            else:
+                # 온디바이스 AI가 이미 긴급 판정하여
+                # 로컬 진동을 발생시킨 경우
+                #
+                # ALERT_THRESHOLD / COOLDOWN_SECONDS를
+                # 모두 무시하고 백엔드 보고 단계로 진행한다.
+
+                logger.info(
+                    "온디바이스 AI 긴급 판정 감지: "
+                    "threshold/cooldown 우회 "
+                    "(block=%s, direction=%s, score=%.1f%%)",
+                    block,
+                    direction_name,
+                    score * 100,
+                )
 
             # -------------------------------------------------
-            # 9. 하드웨어 알림
+            # 8. 하드웨어 ALERT
+            #
+            # 온디바이스 AI가 이미 진동시킨 경우에는
+            # 중복 진동을 방지하기 위해 ALERT를 다시 보내지 않는다.
             # -------------------------------------------------
-            await websocket.send_text(
-                f"ALERT:"
-                f"{block}:"
-                f"{direction_name}"
-            )
 
-            logger.warning(
-                "알림 전송: %s, "
-                "direction=%s (%.1f%%)",
-                block,
-                direction_name,
-                score * 100,
-            )
+            if not ondevice_vibrated:
+                await websocket.send_text(
+                    f"ALERT:"
+                    f"{block}:"
+                    f"{direction_name}"
+                )
+
+                logger.warning(
+                    "알림 전송: %s, "
+                    "direction=%s (%.1f%%)",
+                    block,
+                    direction_name,
+                    score * 100,
+                )
+
+            else:
+                logger.info(
+                    "하드웨어 ALERT 생략: "
+                    "온디바이스 AI에서 이미 진동함 "
+                    "(block=%s, direction=%s)",
+                    block,
+                    direction_name,
+                )
+
+            # -------------------------------------------------
+            # 9. cooldown 시간 갱신
+            #
+            # 요구사항에 따라 ondevice_vibrated == True여도
+            # _last_alert_time을 갱신한다.
+            # -------------------------------------------------
 
             _last_alert_time[
                 alert_key
@@ -249,13 +339,18 @@ async def neckband_websocket(websocket: WebSocket):
 
             # -------------------------------------------------
             # 10. 백엔드로 분석 결과 전송
+            #
+            # ondevice_vibrated는 true / false 관계없이
+            # 항상 백엔드 request body에 포함된다.
             # -------------------------------------------------
+
             await send_detection(
                 websocket
                 .app
                 .state
                 .http_client,
                 result,
+                ondevice_vibrated=ondevice_vibrated,
             )
 
     except WebSocketDisconnect:
@@ -325,6 +420,7 @@ async def analyze_websocket(
             # -------------------------------------------------
             # 1. 1초 PCM frame 수신
             # -------------------------------------------------
+
             audio_bytes = (
                 await websocket
                 .receive_bytes()
@@ -343,6 +439,7 @@ async def analyze_websocket(
             # -------------------------------------------------
             # 2. 32,000 byte 검사
             # -------------------------------------------------
+
             if (
                 received_size
                 != EXPECTED_AUDIO_BYTES
@@ -371,6 +468,7 @@ async def analyze_websocket(
             # -------------------------------------------------
             # 3. YAMNet 추론
             # -------------------------------------------------
+
             started_at = (
                 time.perf_counter()
             )
@@ -399,6 +497,7 @@ async def analyze_websocket(
             # -------------------------------------------------
             # 4. 결과 없음
             # -------------------------------------------------
+
             if result is None:
                 await websocket.send_json({
                     "status": "ok",
@@ -415,6 +514,7 @@ async def analyze_websocket(
             # -------------------------------------------------
             # 5. 분석 결과 반환
             # -------------------------------------------------
+
             await websocket.send_json({
                 "status": "ok",
                 "top_sounds": top_sounds,

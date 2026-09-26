@@ -18,17 +18,21 @@ DIRECTION_NAMES = {
 }
 
 
-def parse_audio_packet(packet: bytes) -> tuple[int, str, bytes]:
+def parse_audio_packet(packet: bytes) -> tuple[int, str, bool, bytes]:
     """
     ESP32 패킷 구조
 
     [0]     : 방향 1바이트
-    [1:4]   : 패딩 3바이트
+    [1]     : 온디바이스 AI 진동 여부
+              0 = 진동 안 함
+              1 = 긴급 판정으로 이미 진동함
+    [2:4]   : 패딩 2바이트
     [4:]    : PCM signed int16 little-endian 오디오
 
     반환값:
         direction_value: 0~4
         direction_name: FRONT/BACK/LEFT/RIGHT/UNKNOWN
+        ondevice_vibrated: 온디바이스 AI 진동 여부
         pcm_audio: 헤더가 제거된 순수 PCM 데이터
     """
 
@@ -43,6 +47,9 @@ def parse_audio_packet(packet: bytes) -> tuple[int, str, bytes]:
         direction_enum = Direction(raw_direction)
     except ValueError:
         direction_enum = Direction.UNKNOWN
+
+    # 온디바이스 AI 긴급 판정으로 이미 진동했는지 여부
+    ondevice_vibrated = packet[1] == 1
 
     pcm_audio = packet[4:]
 
@@ -59,5 +66,6 @@ def parse_audio_packet(packet: bytes) -> tuple[int, str, bytes]:
     return (
         int(direction_enum.value),
         DIRECTION_NAMES[direction_enum],
+        ondevice_vibrated,
         pcm_audio,
     )
