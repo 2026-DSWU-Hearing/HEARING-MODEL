@@ -66,6 +66,8 @@ async def send_detection(
         "detected_at": datetime.now(
             timezone.utc
         ).isoformat(),
+
+        "ondevice_vibrated": ondevice_vibrated,
     }
 
     try:

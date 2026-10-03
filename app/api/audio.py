@@ -237,58 +237,63 @@ async def neckband_websocket(websocket: WebSocket):
             # -------------------------------------------------
             # 7. 백엔드 보고 여부 판단
             #
-            # ondevice_vibrated == True:
-            #   온디바이스 AI가 이미 긴급으로 판단하여
-            #   사용자에게 진동을 발생시킨 상태.
+            # 긴급 소리:
+            #   YAMNet이 같은 실제 소리를
+            #   사이렌 → 응급차량 → 경보음 등으로
+            #   다르게 분류할 수 있으므로 block 이름과 관계없이
+            #   "긴급" 하나의 key로 cooldown을 적용한다.
             #
-            #   따라서 서버 YAMNet score와 관계없이
-            #   사후 웹앱 알림을 남기기 위해 백엔드에 보고한다.
+            # ondevice_vibrated == True 이면서
+            # YAMNet 재분류 결과도 "긴급"인 경우:
+            #   - ALERT_THRESHOLD는 무시
+            #   - COOLDOWN_SECONDS는 그대로 적용
             #
-            # ondevice_vibrated == False:
-            #   기존 ALERT_THRESHOLD / COOLDOWN 로직 유지.
+            # 그 외:
+            #   - 기존 ALERT_THRESHOLD 적용
+            #   - COOLDOWN_SECONDS 적용
             # -------------------------------------------------
 
-            alert_key = f"{block}"
+            # 긴급 소리는 이름과 상관없이 하나로 묶어서 쿨다운
+            # (넥밴드 진동 쿨다운과 같은 기준)
+            is_emergency = category == "긴급"
 
-            if not ondevice_vibrated:
+            alert_key = (
+                "긴급"
+                if is_emergency
+                else f"{block}"
+            )
 
-                # ---------------------------------------------
-                # 7-1. 기존 Alert threshold 확인
-                # ---------------------------------------------
+            # 온디바이스에서 이미 진동했고,
+            # 서버의 재분류 결과도 긴급인 경우에만
+            # 신뢰도 임계값을 건너뛴다.
+            skip_threshold = (
+                ondevice_vibrated
+                and is_emergency
+            )
 
-                if (
-                    score
-                    < settings.ALERT_THRESHOLD
-                ):
-                    continue
+            # 일반적인 경우에는 기존 0.7 threshold 적용
+            if (
+                not skip_threshold
+                and score < settings.ALERT_THRESHOLD
+            ):
+                continue
 
-                # ---------------------------------------------
-                # 7-2. 기존 cooldown 확인
-                # ---------------------------------------------
+            # cooldown은 모든 경우에 적용
+            last_alert = _last_alert_time.get(
+                alert_key,
+                0,
+            )
 
-                last_alert = (
-                    _last_alert_time.get(
-                        alert_key,
-                        0,
-                    )
-                )
+            if (
+                now - last_alert
+                <= settings.COOLDOWN_SECONDS
+            ):
+                continue
 
-                if (
-                    now - last_alert
-                    <= settings.COOLDOWN_SECONDS
-                ):
-                    continue
-
-            else:
-                # 온디바이스 AI가 이미 긴급 판정하여
-                # 로컬 진동을 발생시킨 경우
-                #
-                # ALERT_THRESHOLD / COOLDOWN_SECONDS를
-                # 모두 무시하고 백엔드 보고 단계로 진행한다.
-
+            if skip_threshold:
                 logger.info(
                     "온디바이스 AI 긴급 판정 감지: "
-                    "threshold/cooldown 우회 "
+                    "threshold 우회 "
                     "(block=%s, direction=%s, score=%.1f%%)",
                     block,
                     direction_name,
