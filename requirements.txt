@@ -1,8 +1,11 @@
+
 fastapi
 uvicorn[standard]
 httpx
 PyJWT
 python-dotenv
-numpy
+numpy==1.26.4
+tensorflow-cpu==2.21.0
 tensorflow-hub==0.16.1
 scipy
+setuptools<81
